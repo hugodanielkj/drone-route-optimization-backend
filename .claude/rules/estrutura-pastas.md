@@ -1,0 +1,1 @@
+/Users/hugodanielespindola/Home/claude-rule-presets/estruturas/express-por-modulo.md

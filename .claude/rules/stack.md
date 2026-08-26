@@ -1,0 +1,1 @@
+/Users/hugodanielespindola/Home/claude-rule-presets/stacks/ts-express-prisma.md

@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Usuário: dono de seus próprios drones, mapas e missões (RN09, RN11).
+model User {
+  id        String   @id @default(uuid())
+  nome      String   @unique
+  senhaHash String
+  createdAt DateTime @default(now())
+
+  drones Drone[]
+  mapas  Mapa[]
+
+  @@map("users")
+}
+
+// Drone: entidade reutilizável entre mapas do mesmo usuário (RN07).
+model Drone {
+  id                  String   @id @default(uuid())
+  nome                String
+  consumoPorIrrigacao Float
+  velocidadeMedia     Float
+  capacidadeBateria   Float
+  userId              String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id])
+  missoes Missao[]
+
+  @@map("drones")
+}
+
+// Mapa: agregado raiz, dono de suas coordenadas (RN08).
+// O ponto de carregamento é embutido diretamente (existe sempre, não é
+// adicionado/removido); os pontos de irrigação são uma tabela relacionada
+// porque são adicionados/removidos individualmente (RF-003.6, RF-003.7),
+// mas só são manipulados através de operações do Mapa — nunca por uma
+// rota própria (RNF-003.3).
+model Mapa {
+  id                 String   @id @default(uuid())
+  pontoCarregamentoX Float
+  pontoCarregamentoY Float
+  userId             String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id])
+  pontosIrrigacao PontoIrrigacao[]
+  missoes         Missao[]
+
+  @@map("mapas")
+}
+
+// Ponto de irrigação: objeto de valor sem identidade de negócio própria —
+// existe apenas como parte do agregado Mapa (RN08). Possui id técnico só
+// para permitir remoção individual via Prisma.
+model PontoIrrigacao {
+  id     String @id @default(uuid())
+  x      Float
+  y      Float
+  mapaId String
+
+  mapa Mapa @relation(fields: [mapaId], references: [id], onDelete: Cascade)
+
+  @@map("pontos_irrigacao")
+}
+
+enum StatusMissao {
+  ATIVA
+  DESATIVADA
+}
+
+// Missão: resultado persistido do cálculo de rota para um par (drone, mapa),
+// único por par (RN12, RNF-004.3). Pernas de rota e coordenadas são objetos
+// de valor embutidos, persistidos como JSON — ver ADR 0003 (estrutura de
+// persistência de pernas/coordenadas).
+model Missao {
+  id                     String       @id @default(uuid())
+  droneId                String
+  mapaId                 String
+  status                 StatusMissao @default(ATIVA)
+  pernas                 Json?
+  consumoEnergeticoTotal Float?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  drone Drone @relation(fields: [droneId], references: [id])
+  mapa  Mapa  @relation(fields: [mapaId], references: [id])
+
+  @@unique([droneId, mapaId])
+  @@map("missoes")
+}
