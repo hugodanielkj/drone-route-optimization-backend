@@ -92,8 +92,12 @@ existe ou é modificada fora do contexto de um mapa específico.
 - **Pertence a um Usuário.**
 - **Atributos:** um único ponto de carregamento (coordenada), uma lista de um ou mais
   pontos de irrigação (coordenadas).
-- **Invariante:** a lista de pontos de irrigação nunca pode ficar vazia. Um mapa sem
-  nenhum ponto de irrigação não tem propósito — não há o que calcular.
+- **Invariante:** a lista de pontos de irrigação nunca pode ficar vazia nem
+  ultrapassar 1000 pontos. Um mapa sem nenhum ponto de irrigação não tem
+  propósito — não há o que calcular.
+- **Invariante de unicidade:** nenhum ponto de irrigação de um mapa pode coincidir
+  com o ponto de carregamento desse mapa, nem com outro ponto de irrigação do mesmo
+  mapa — toda coordenada referenciada por um Mapa é única dentro dele.
 - **Encapsulamento:** alterações nos pontos de irrigação ou no ponto de carregamento
   acontecem através de operações do próprio mapa, nunca por manipulação direta de uma
   lista externa a ele.
@@ -224,6 +228,11 @@ ou atualizada para aquele par (drone, mapa).
 - **RN15** — Um Drone ou Mapa referenciado por qualquer Missão (ativa ou
   desativada) não pode ser excluído. A exclusão só é permitida quando não existe
   nenhuma Missão associada.
+- **RN16** — Um Mapa não pode ter mais de 1000 pontos de irrigação cadastrados.
+- **RN17** — Nenhum ponto de irrigação de um Mapa pode ter a mesma coordenada do
+  ponto de carregamento desse mapa.
+- **RN18** — Não pode haver dois pontos de irrigação com coordenadas iguais entre
+  si dentro do mesmo Mapa.
 
 ## Fora de escopo nesta fase
 
@@ -304,3 +313,15 @@ ou atualizada para aquele par (drone, mapa).
   mais próximo é alcançável dentro da capacidade de bateria, a API retorna erro e
   nenhum registro de Missão é criado ou atualizado — não existe um status de
   "inviável" na entidade Missão, apenas ativa/desativada.
+- **Unicidade de coordenada dentro do Mapa (RN17, RN18).** Um ponto de irrigação
+  que coincide com o ponto de carregamento é operacionalmente sem sentido — o
+  drone já parte de lá, não há trecho de voo a percorrer até ele. Dois pontos de
+  irrigação idênticos entre si seriam redundantes: o segundo não adiciona nenhuma
+  entrega real a mais para o cálculo de rota, apenas infla o problema de
+  otimização sem propósito. Ambos os casos são rejeitados no cadastro do Mapa,
+  não silenciosamente deduplicados.
+- **Limite de 1000 pontos de irrigação por Mapa (RN16).** Estabelecido como um
+  teto operacional razoável para o volume de pontos de irrigação de uma única
+  área de operação, evitando que o cadastro de mapas sirva como vetor de entrada
+  descontrolada de dados que impactaria o desempenho do pipeline de otimização de
+  rota (Sprint 05).
