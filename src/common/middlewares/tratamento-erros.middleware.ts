@@ -28,6 +28,11 @@ export function tratamentoErrosMiddleware(
     return;
   }
 
+  if (error instanceof SyntaxError && (error as { type?: string }).type === 'entity.parse.failed') {
+    res.status(400).json({ erro: 'Corpo da requisição não é um JSON válido' });
+    return;
+  }
+
   // eslint-disable-next-line no-console
   console.error(error);
   res.status(500).json({ erro: 'Erro interno do servidor' });

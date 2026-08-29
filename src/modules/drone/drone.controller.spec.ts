@@ -18,6 +18,20 @@ const droneValido = {
 };
 
 describe('POST /drones', () => {
+  // Teste de hugo
+  it('cadastra um drone mas o json está quebrado(inválido)', async () => {
+    const { token, id } = await cadastrarELogar('hugo');
+
+    const resposta = await request(app)
+      .post('/drones')
+      .set('Authorization', `Bearer ${token}`)
+      .send('{"nome": "Drone A", "consumoPorIrrigacao": 1.5, "velocidadeMedia": 10 "capacidadeBateria": 50000}'); // Criar um json quebrado
+
+    expect(resposta.status).toBe(400);
+    //expect(resposta.body).toMatchObject({ nome: 'Drone A', userId: id });
+    //expect(resposta.body.id).toEqual(expect.any(String));
+  })
+
   // Caso 1
   it('cadastra um drone com atributos válidos', async () => {
     const { token, id } = await cadastrarELogar('hugo');
