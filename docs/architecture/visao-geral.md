@@ -1,7 +1,7 @@
 # Visão geral da arquitetura
 
 > Retrato do estado atual do sistema — atualizado ao final de cada sprint.
-> Última atualização: **Sprint 02** (CRUD completo de Drone).
+> Última atualização: **Sprint 03** (Mapa: cadastro e consulta).
 
 ## Stack
 
@@ -17,14 +17,16 @@ injeção de dependência, no espírito do Nest mas registrada manualmente em
 |---|---|---|
 | `usuario` | `src/modules/usuario/` | Cadastro de usuário (`POST /usuarios`): valida DTO, faz hash da senha, persiste, garante unicidade de `nome` (US-001). |
 | `auth` | `src/modules/auth/` | Login (`POST /auth/login`): valida credenciais contra o hash persistido, emite JWT (US-002). |
-| `common/middlewares` | `src/common/middlewares/` | `autenticacaoMiddleware` (US-003) — valida o JWT de requisições, anexa `req.usuarioId`; `tratamentoErrosMiddleware` — único ponto que traduz erros (`AppError`, `ZodError`) em resposta HTTP, último middleware registrado em `app.ts`. |
+| `common/middlewares` | `src/common/middlewares/` | `autenticacaoMiddleware` (US-003) — valida o JWT de requisições, anexa `req.usuarioId`; `tratamentoErrosMiddleware` — único ponto que traduz erros (`AppError`, `ZodError`, `SyntaxError` de JSON malformado — `entity.parse.failed` do `express.json()`) em resposta HTTP, último middleware registrado em `app.ts`. |
 | `common/errors` | `src/common/errors/` | Hierarquia `AppError` (`ValidationError` 400, `UnauthorizedError` 401, `NotFoundError` 404, `ConflictError` 409), cada uma carregando seu próprio `statusCode`. |
 | `common/security` | `src/common/security/` | `senha.ts` (hash/comparação bcrypt, ADR-001) e `token.ts` (emissão/validação de JWT, ADR-002) — funções puras reutilizadas por `usuario` e `auth`, sem acesso a `req`/`res`. |
 | `config` | `src/config/` | `env.ts` (leitura validada de variáveis de ambiente), `prisma.ts` (instância única do `PrismaClient`). |
 | `drone` | `src/modules/drone/` | CRUD completo de Drone, protegido por `autenticacaoMiddleware` em todas as rotas: `POST /` (US-004), `GET /` (US-005), `GET /:id` (US-006), `PATCH /:id` — edição parcial (US-007), `DELETE /:id` (US-008). Ownership por `userId` em toda operação de leitura/edição/exclusão (RN11); `PATCH` desativa Missões `ATIVA` associadas em transação (RN13); `DELETE` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15). |
+| `mapa` | `src/modules/mapa/` | Cadastro e consulta de Mapa, protegido por `autenticacaoMiddleware`: `POST /` (US-009), `GET /` (US-010), `GET /:id` (US-011). Cria Mapa + PontosIrrigacao atomicamente via nested write do Prisma. Ownership centralizado em `mapaService.buscarPorId`, réplica do padrão de `drone` (RN11). Valida no schema Zod (`cadastroMapaSchema`): lista de irrigação não vazia (RN01) e limitada a 1000 pontos (RN16), nenhum ponto de irrigação igual ao ponto de carregamento (RN17) nem duplicado entre si (RN18). Resposta agrupa coordenadas como `{x,y}` em vez dos campos achatados do Prisma (`ADR-003`). Ainda sem edição/exclusão (Sprint 04). |
 
 **Ainda não existem** (previstos para sprints seguintes, ver
-`docs/sprints/`): módulos `mapa` (Sprints 03-04), `missao` (Sprints 05-06).
+`docs/sprints/`): edição/exclusão de `mapa` e manipulação de pontos
+(Sprint 04), módulo `missao` (Sprints 05-06).
 
 ## Como os módulos se comunicam
 
@@ -39,6 +41,7 @@ graph TD
         UsuarioRoutes[usuario.routes]
         AuthRoutes[auth.routes]
         DroneRoutes[drone.routes]
+        MapaRoutes[mapa.routes]
         AuthMW[autenticacaoMiddleware]
         ErroMW[tratamentoErrosMiddleware]
     end
@@ -49,6 +52,8 @@ graph TD
     AuthService[auth.service]
     DroneController[drone.controller]
     DroneService[drone.service]
+    MapaController[mapa.controller]
+    MapaService[mapa.service]
 
     Senha[common/security/senha.ts]
     Token[common/security/token.ts]
@@ -60,6 +65,7 @@ graph TD
     Client -->|POST /usuarios| UsuarioRoutes --> UsuarioController --> UsuarioService
     Client -->|POST /auth/login| AuthRoutes --> AuthController --> AuthService
     Client -->|"/drones/*"| DroneRoutes --> AuthMW --> DroneController --> DroneService
+    Client -->|"/mapas/*"| MapaRoutes --> AuthMW --> MapaController --> MapaService
 
     UsuarioService --> Senha
     UsuarioService --> Prisma
@@ -67,10 +73,12 @@ graph TD
     AuthService --> Token
     AuthService --> Prisma
     DroneService --> Prisma
+    MapaService --> Prisma
 
     UsuarioService -.erro.-> Errors
     AuthService -.erro.-> Errors
     DroneService -.erro.-> Errors
+    MapaService -.erro.-> Errors
     AuthMW -.token inválido.-> Errors
     Errors -.next(erro).-> ErroMW
     ErroMW -->|resposta HTTP| Client
@@ -79,12 +87,13 @@ graph TD
 ```
 
 Fluxo de uma requisição autenticada (padrão seguido por `drone` desde a
-Sprint 02, e reaproveitado por `mapa`/`missao` nas sprints seguintes):
-`Client → <modulo>.routes (com autenticacaoMiddleware) → <modulo>.controller
-→ <modulo>.service → Prisma → PostgreSQL`, com `req.usuarioId` disponível a
-partir do middleware para checagem de ownership (RN11) dentro do service de
-cada módulo — em `drone`, centralizada em `droneService.buscarPorId`,
-reaproveitada por `editar` e `excluir`.
+Sprint 02, reaproveitado por `mapa` nesta sprint, e por `missao` nas sprints
+seguintes): `Client → <modulo>.routes (com autenticacaoMiddleware) →
+<modulo>.controller → <modulo>.service → Prisma → PostgreSQL`, com
+`req.usuarioId` disponível a partir do middleware para checagem de ownership
+(RN11) dentro do service de cada módulo — em `drone`, centralizada em
+`droneService.buscarPorId`, reaproveitada por `editar` e `excluir`; em `mapa`,
+a mesma estrutura em `mapaService.buscarPorId`.
 
 ## Dependências externas
 
@@ -106,12 +115,29 @@ antecipados na Sprint 01 para que as regras RN13/RN15 (edição desativa
 Missão; exclusão bloqueada se houver Missão associada), implementadas a
 partir da Sprint 02, consultem tabelas reais desde o início — decisão
 registrada nos arquivos de sprint (`docs/sprints/sprint-01.md` a
-`sprint-04.md`). `User` e `Drone` têm lógica de negócio (CRUD) implementada
-até aqui; `Mapa`, `PontoIrrigacao` e `Missao` seguem existindo apenas no
-schema, sem service próprio ainda — usados nesta sprint só como fixtures de
-teste inseridas diretamente via Prisma para validar RN13/RN15.
+`sprint-04.md`). `User`, `Drone` e, a partir desta sprint, `Mapa` e
+`PontoIrrigacao` têm lógica de negócio (CRUD parcial, no caso de `Mapa`)
+implementada; `Missao` segue existindo apenas no schema, sem service próprio
+— usado até aqui só como fixture de teste inserida diretamente via Prisma
+para validar RN13/RN15 do módulo `drone`.
 
 ## O que mudou desde a última atualização
+
+**Sprint 03** — módulo `mapa` implementado (cadastro e consulta: US-009 a
+US-011). `POST /mapas` cria o Mapa e seus PontosIrrigacao atomicamente via
+nested write do Prisma, validando no schema Zod (`cadastroMapaSchema`) tanto
+as regras já previstas no backlog (RN01: lista de irrigação não vazia) quanto
+três regras de negócio novas, decididas explicitamente pelo usuário durante o
+planejamento desta sprint e formalizadas em `regras-de-negocio.md` (RN16:
+máximo de 1000 pontos de irrigação por mapa; RN17: nenhum ponto de irrigação
+pode coincidir com o ponto de carregamento; RN18: nenhum ponto de irrigação
+pode coincidir com outro do mesmo mapa — cada uma com mensagem de erro
+dedicada). `GET /mapas` e `GET /mapas/:id` seguem o mesmo padrão de listagem
+e ownership já validado em `drone` (RN11), com `buscarPorId` pronto para
+reuso pelas histórias de manipulação de pontos e exclusão da Sprint 04. Novo
+`ADR-003`: resposta de toda rota de Mapa agrupa coordenadas como `{x,y}` em
+vez dos campos achatados do Prisma, decisão confirmada explicitamente com o
+usuário e que deve se manter consistente na Sprint 04.
 
 **Sprint 02** — módulo `drone` implementado por completo (US-004 a US-008):
 cadastro, listagem, consulta por id, edição (`PATCH` parcial — decisão de
