@@ -79,7 +79,7 @@ enum StatusMissao {
 
 // Missão: resultado persistido do cálculo de rota para um par (drone, mapa),
 // único por par (RN12, RNF-004.3). Pernas de rota e coordenadas são objetos
-// de valor embutidos, persistidos como JSON — ver ADR 0003 (estrutura de
+// de valor embutidos, persistidos como JSON — ver ADR-004 (estrutura de
 // persistência de pernas/coordenadas).
 model Missao {
   id                     String       @id @default(uuid())
