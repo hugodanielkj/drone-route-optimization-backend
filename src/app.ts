@@ -3,6 +3,7 @@ import { usuarioRouter } from './modules/usuario/usuario.routes';
 import { authRouter } from './modules/auth/auth.routes';
 import { droneRouter } from './modules/drone/drone.routes';
 import { mapaRouter } from './modules/mapa/mapa.routes';
+import { missaoRouter } from './modules/missao/missao.routes';
 import { tratamentoErrosMiddleware } from './common/middlewares/tratamento-erros.middleware';
 
 export function createApp() {
@@ -14,6 +15,7 @@ export function createApp() {
   app.use('/auth', authRouter);
   app.use('/drones', droneRouter);
   app.use('/mapas', mapaRouter);
+  app.use('/missoes', missaoRouter);
 
   // Último middleware registrado: único lugar que decide o formato de erro.
   app.use(tratamentoErrosMiddleware);

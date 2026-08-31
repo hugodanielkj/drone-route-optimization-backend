@@ -1,7 +1,7 @@
 # Visão geral da arquitetura
 
 > Retrato do estado atual do sistema — atualizado ao final de cada sprint.
-> Última atualização: **Sprint 04** (Mapa: manipulação de pontos e exclusão — CRUD completo).
+> Última atualização: **Sprint 05** (motor de cálculo de rota + `POST /missoes`, US-016).
 
 ## Stack
 
@@ -23,10 +23,12 @@ injeção de dependência, no espírito do Nest mas registrada manualmente em
 | `config` | `src/config/` | `env.ts` (leitura validada de variáveis de ambiente), `prisma.ts` (instância única do `PrismaClient`). |
 | `drone` | `src/modules/drone/` | CRUD completo de Drone, protegido por `autenticacaoMiddleware` em todas as rotas: `POST /` (US-004), `GET /` (US-005), `GET /:id` (US-006), `PATCH /:id` — edição parcial (US-007), `DELETE /:id` (US-008). Ownership por `userId` em toda operação de leitura/edição/exclusão (RN11); `PATCH` desativa Missões `ATIVA` associadas em transação (RN13); `DELETE` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15). |
 | `mapa` | `src/modules/mapa/` | **CRUD completo de Mapa**, protegido por `autenticacaoMiddleware`: `POST /` (US-009), `GET /` (US-010), `GET /:id` (US-011), `PATCH /:id/ponto-carregamento` (US-012), `POST /:id/pontos-irrigacao` (US-013), `DELETE /:id/pontos-irrigacao/:pontoId` (US-014), `DELETE /:id` (US-015). Ownership centralizado em `mapaService.buscarPorId`, réplica do padrão de `drone` (RN11). RN01 (não remover o último ponto de irrigação), RN16 (máx. 1000 pontos), RN17 (ponto de irrigação ≠ ponto de carregamento) e RN18 (sem pontos de irrigação duplicados) são validadas no schema Zod quando a checagem é só sobre o payload (cadastro, US-009), e no service via `ConflictError`/409 quando dependem de estado já persistido (US-012 a US-014) — decisão confirmada explicitamente com o usuário. `PATCH`/`POST`/`DELETE :pontoId` desativam Missões `ATIVA` associadas em transação (RN13); `DELETE /:id` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15), mesmo padrão de `drone`. Resposta agrupa coordenadas como `{x,y}` em vez dos campos achatados do Prisma (`ADR-003`). |
+| `missao` | `src/modules/missao/` | `POST /` (US-016), protegido por `autenticacaoMiddleware`: calcula e persiste uma nova Missão `ATIVA` para um par (drone, mapa) do usuário autenticado (RN11, via `droneService.buscarPorId`/`mapaService.buscarPorId`) sem Missão existente — par já calculado responde `409` (reaproveitamento/reativação reais ficam para a Sprint 06, US-017/US-018). Motor de cálculo isolado em `missao/motor/` (sem Express/Prisma): vizinho mais próximo → 2-opt (ciclo fechado, first-improvement) no trajeto completo → divisão em pernas por capacidade de bateria (RN04, RN05 estendida a todos os pontos) → `move` entre pernas (steepest descent, só confirma troca que preserva RN04 nas duas pernas — regra corrigida nesta sprint) → 2-opt por perna. Rota inviável (RN05) e Missão já existente respondem `409` (`ConflictError`). Pernas persistidas como JSON em `Missao.pernas` (`ADR-004`). |
 
-**Ainda não existe** (previsto para sprints seguintes, ver `docs/sprints/`):
-módulo `missao` (Sprints 05-06) — o CRUD de Mapa e Drone está completo e
-pronto para ser consumido pelo pipeline de cálculo de rota.
+**Ainda não existe** (previsto para a Sprint 06, ver `docs/sprints/sprint-06.md`):
+reaproveitamento de missão ativa (RN12, US-017), recálculo/reativação de
+missão desativada (RN14, US-018), listagem (US-019) e consulta de detalhe
+(US-020) de Missões.
 
 ## Como os módulos se comunicam
 
@@ -42,6 +44,7 @@ graph TD
         AuthRoutes[auth.routes]
         DroneRoutes[drone.routes]
         MapaRoutes[mapa.routes]
+        MissaoRoutes[missao.routes]
         AuthMW[autenticacaoMiddleware]
         ErroMW[tratamentoErrosMiddleware]
     end
@@ -54,10 +57,14 @@ graph TD
     DroneService[drone.service]
     MapaController[mapa.controller]
     MapaService[mapa.service]
+    MissaoController[missao.controller]
+    MissaoService[missao.service]
+    Motor["missao/motor (função pura: vizinho mais próximo → 2-opt → divisão em pernas → move → 2-opt por perna)"]
 
     Senha[common/security/senha.ts]
     Token[common/security/token.ts]
     Errors[common/errors/app-error.ts]
+    Distancia[common/util/distancia.ts]
 
     Prisma[(PrismaClient)]
     DB[(PostgreSQL)]
@@ -66,6 +73,7 @@ graph TD
     Client -->|POST /auth/login| AuthRoutes --> AuthController --> AuthService
     Client -->|"/drones/*"| DroneRoutes --> AuthMW --> DroneController --> DroneService
     Client -->|"/mapas/*"| MapaRoutes --> AuthMW --> MapaController --> MapaService
+    Client -->|POST /missoes| MissaoRoutes --> AuthMW --> MissaoController --> MissaoService
 
     UsuarioService --> Senha
     UsuarioService --> Prisma
@@ -74,11 +82,17 @@ graph TD
     AuthService --> Prisma
     DroneService --> Prisma
     MapaService --> Prisma
+    MissaoService -->|"RN11: reaproveita buscarPorId"| DroneService
+    MissaoService -->|"RN11: reaproveita buscarPorId"| MapaService
+    MissaoService --> Motor
+    MissaoService --> Prisma
+    Motor --> Distancia
 
     UsuarioService -.erro.-> Errors
     AuthService -.erro.-> Errors
     DroneService -.erro.-> Errors
     MapaService -.erro.-> Errors
+    MissaoService -.erro.-> Errors
     AuthMW -.token inválido.-> Errors
     Errors -.next(erro).-> ErroMW
     ErroMW -->|resposta HTTP| Client
@@ -87,13 +101,16 @@ graph TD
 ```
 
 Fluxo de uma requisição autenticada (padrão seguido por `drone` desde a
-Sprint 02, reaproveitado por `mapa` nesta sprint, e por `missao` nas sprints
-seguintes): `Client → <modulo>.routes (com autenticacaoMiddleware) →
+Sprint 02, reaproveitado por `mapa` na Sprint 04 e por `missao` nesta
+sprint): `Client → <modulo>.routes (com autenticacaoMiddleware) →
 <modulo>.controller → <modulo>.service → Prisma → PostgreSQL`, com
 `req.usuarioId` disponível a partir do middleware para checagem de ownership
 (RN11) dentro do service de cada módulo — em `drone`, centralizada em
 `droneService.buscarPorId`, reaproveitada por `editar` e `excluir`; em `mapa`,
-a mesma estrutura em `mapaService.buscarPorId`.
+a mesma estrutura em `mapaService.buscarPorId`; `missaoService` é o primeiro
+módulo do projeto a importar o service de outros dois módulos diretamente
+(`droneService`/`mapaService`), reaproveitando a checagem de ownership já
+existente em vez de duplicá-la.
 
 ## Dependências externas
 
@@ -116,11 +133,52 @@ Missão; exclusão bloqueada se houver Missão associada), implementadas a
 partir da Sprint 02, consultem tabelas reais desde o início — decisão
 registrada nos arquivos de sprint (`docs/sprints/sprint-01.md` a
 `sprint-04.md`). `User`, `Drone` e `Mapa`/`PontoIrrigacao` têm CRUD completo
-implementado; `Missao` segue existindo apenas no schema, sem service próprio
-— usado até aqui só como fixture de teste inserida diretamente via Prisma
-para validar RN13/RN15 dos módulos `drone` e `mapa`.
+implementado; `Missao` agora tem seu primeiro service (`missaoService.calcular`,
+US-016) escrevendo registros reais nela — até a Sprint 04, era usada só como
+fixture de teste inserida diretamente via Prisma para validar RN13/RN15 dos
+módulos `drone` e `mapa`. `Missao.pernas` (`Json?`) persiste o array de pernas
+retornado pelo motor de cálculo, formato decidido em `ADR-004`.
 
 ## O que mudou desde a última atualização
+
+**Sprint 05** — módulo `missao` criado (US-016): `POST /missoes` calcula e
+persiste a primeira Missão para um par (drone, mapa). Motor de cálculo isolado
+em `src/modules/missao/motor/` (função pura, sem Express/Prisma), decomposto
+em uma etapa por arquivo — `consumo-trecho.ts` (fórmula e constantes fixas),
+`perna.ts` (`calcularPerna`, reaproveitada por divisão em pernas, `move` e
+agregação final), `vizinho-mais-proximo.ts`, `dois-opt.ts` (ciclo fechado,
+first-improvement, reaproveitado no trajeto completo e por perna),
+`divisao-pernas.ts` (`verificarViabilidadeMinima` — RN05 estendida a todos os
+pontos, não só o mais próximo, decisão confirmada com o usuário — e
+`dividirEmPernas`), `mover-entre-pernas.ts` e `pipeline.ts` (`calcularRota`,
+composição das 5 etapas). Distância euclidiana extraída para
+`src/common/util/distancia.ts`, primeiro utilitário genérico fora de
+`common/security`. `missaoService.calcular` é o primeiro service do projeto a
+importar diretamente os services de outros dois módulos (`droneService` e
+`mapaService`), reaproveitando `buscarPorId` de ambos para RN11 em vez de
+duplicar a checagem de ownership. Rota inviável (RN05) e Missão já existente
+para o par (fora de escopo desta sprint — reaproveitamento/reativação são
+US-017/US-018, Sprint 06) respondem `409` (`ConflictError`).
+
+**Correção de regra de negócio durante a implementação**: a especificação
+original do `move` (RF-004.9/`regras-de-negocio.md`) previa nenhuma checagem
+de viabilidade após a troca, por decisão deliberada. Ao testar o pipeline de
+ponta a ponta, ficou claro que essa ausência de checagem não era um caso de
+borda: como a constante `alpha` domina a fórmula de consumo, o `move` tendia
+a desfazer a divisão em pernas quase sempre que pontos de pernas diferentes
+estivessem próximos, consolidando-os de volta numa perna que ultrapassa a
+capacidade de bateria. Reportado ao usuário, que decidiu reverter a regra:
+`moverEntrePernas` agora só confirma uma troca quando as duas pernas
+resultantes continuam dentro de `capacidadeBateria` (RN04) **e** o consumo
+combinado diminui — RN04 tratada como invariante do sistema, nunca violável
+pelo `move`. `regras-de-negocio.md` e `RF-004.md` foram atualizados; detalhes
+completos em `docs/implementation/US-016.md`.
+
+Novo `ADR-004`: formato de persistência de `Missao.pernas` (array de
+`{sequencia, distanciaTotal, consumoTotal}`, coordenadas sem identidade,
+ecoando o precedente de `ADR-003`) — comentário em `prisma/schema.prisma`
+corrigido de `ADR 0003` (referência incorreta, já sinalizada pelo próprio
+`ADR-003`) para `ADR-004`.
 
 **Sprint 04** — CRUD de Mapa encerrado (US-012 a US-015): `PATCH
 /mapas/:id/ponto-carregamento` (US-012), `POST /mapas/:id/pontos-irrigacao`

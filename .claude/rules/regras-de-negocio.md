@@ -156,9 +156,14 @@ Dado um Drone e um Mapa, o cálculo de uma missão segue cinco etapas:
    porque a etapa 4 pode ter alterado a composição de pontos de cada perna.
 
 **Nota sobre `move`:** a variante adotada prioriza reduzir o consumo de bateria
-combinado das duas pernas envolvidas na troca, não a distância bruta. Por decisão
-deliberada, ela não recalcula se as duas pernas resultantes continuam
-operacionalmente viáveis depois da troca.
+combinado das duas pernas envolvidas na troca, não a distância bruta. Uma troca
+só é confirmada quando **ambas** as condições valem: (1) as duas pernas
+resultantes da troca continuam operacionalmente viáveis — o consumo energético
+de cada uma continua dentro da capacidade de bateria do drone (RN04); e (2) o
+consumo energético combinado das duas pernas efetivamente diminui em relação
+ao estado anterior à troca. Uma troca que violaria RN04 em qualquer uma das
+duas pernas resultantes é descartada, mesmo que reduzisse o consumo combinado
+— RN04 nunca pode ser violada pelo `move`.
 
 O resultado final agrega todas as pernas otimizadas e o consumo energético total
 (soma dos consumos energéticos ponderados — fórmula de `consumo_trecho` — de todos os
@@ -285,10 +290,17 @@ ou atualizada para aquele par (drone, mapa).
   convergência); por fim, 2-opt roda novamente, agora por perna individual, para
   corrigir ineficiências locais que o `move` possa ter introduzido ao alterar a
   composição de cada perna.
-- **Ausência de checagem de viabilidade após `move` é intencional.** A variante
-  adotada não recalcula, depois de uma troca, se as duas pernas resultantes
-  continuam dentro da capacidade de bateria do drone — isso é uma decisão de
-  design, não uma lacuna a ser corrigida.
+- **`move` sempre verifica viabilidade antes de confirmar uma troca.** Uma
+  troca só é aplicada quando as duas pernas resultantes continuam dentro da
+  capacidade de bateria do drone (RN04) **e** o consumo energético combinado
+  das duas pernas diminui. RN04 é um invariante do sistema — nenhuma etapa do
+  pipeline, incluindo `move`, pode produzir uma perna inviável. Uma primeira
+  versão desta regra havia deliberadamente dispensado essa checagem; revertida
+  durante a Sprint 05 (implementação de US-016) ao se constatar que, sem ela,
+  o `move` podia desfazer a divisão em pernas de RN04 na prática — não só em
+  casos de borda — sempre que consolidar pontos em menos pernas reduzisse o
+  consumo combinado (o que a fórmula favorece fortemente, dado o peso da
+  constante `alpha`).
 - **Papel do consumo por irrigação na fórmula de consumo.** O peso da carga
   considerado em cada trecho é o número de entregas ainda não realizadas
   multiplicado pelo consumo por irrigação — não uma contagem bruta de pontos
