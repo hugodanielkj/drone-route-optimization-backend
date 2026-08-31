@@ -1,7 +1,7 @@
 # Visão geral da arquitetura
 
 > Retrato do estado atual do sistema — atualizado ao final de cada sprint.
-> Última atualização: **Sprint 03** (Mapa: cadastro e consulta).
+> Última atualização: **Sprint 04** (Mapa: manipulação de pontos e exclusão — CRUD completo).
 
 ## Stack
 
@@ -22,11 +22,11 @@ injeção de dependência, no espírito do Nest mas registrada manualmente em
 | `common/security` | `src/common/security/` | `senha.ts` (hash/comparação bcrypt, ADR-001) e `token.ts` (emissão/validação de JWT, ADR-002) — funções puras reutilizadas por `usuario` e `auth`, sem acesso a `req`/`res`. |
 | `config` | `src/config/` | `env.ts` (leitura validada de variáveis de ambiente), `prisma.ts` (instância única do `PrismaClient`). |
 | `drone` | `src/modules/drone/` | CRUD completo de Drone, protegido por `autenticacaoMiddleware` em todas as rotas: `POST /` (US-004), `GET /` (US-005), `GET /:id` (US-006), `PATCH /:id` — edição parcial (US-007), `DELETE /:id` (US-008). Ownership por `userId` em toda operação de leitura/edição/exclusão (RN11); `PATCH` desativa Missões `ATIVA` associadas em transação (RN13); `DELETE` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15). |
-| `mapa` | `src/modules/mapa/` | Cadastro e consulta de Mapa, protegido por `autenticacaoMiddleware`: `POST /` (US-009), `GET /` (US-010), `GET /:id` (US-011). Cria Mapa + PontosIrrigacao atomicamente via nested write do Prisma. Ownership centralizado em `mapaService.buscarPorId`, réplica do padrão de `drone` (RN11). Valida no schema Zod (`cadastroMapaSchema`): lista de irrigação não vazia (RN01) e limitada a 1000 pontos (RN16), nenhum ponto de irrigação igual ao ponto de carregamento (RN17) nem duplicado entre si (RN18). Resposta agrupa coordenadas como `{x,y}` em vez dos campos achatados do Prisma (`ADR-003`). Ainda sem edição/exclusão (Sprint 04). |
+| `mapa` | `src/modules/mapa/` | **CRUD completo de Mapa**, protegido por `autenticacaoMiddleware`: `POST /` (US-009), `GET /` (US-010), `GET /:id` (US-011), `PATCH /:id/ponto-carregamento` (US-012), `POST /:id/pontos-irrigacao` (US-013), `DELETE /:id/pontos-irrigacao/:pontoId` (US-014), `DELETE /:id` (US-015). Ownership centralizado em `mapaService.buscarPorId`, réplica do padrão de `drone` (RN11). RN01 (não remover o último ponto de irrigação), RN16 (máx. 1000 pontos), RN17 (ponto de irrigação ≠ ponto de carregamento) e RN18 (sem pontos de irrigação duplicados) são validadas no schema Zod quando a checagem é só sobre o payload (cadastro, US-009), e no service via `ConflictError`/409 quando dependem de estado já persistido (US-012 a US-014) — decisão confirmada explicitamente com o usuário. `PATCH`/`POST`/`DELETE :pontoId` desativam Missões `ATIVA` associadas em transação (RN13); `DELETE /:id` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15), mesmo padrão de `drone`. Resposta agrupa coordenadas como `{x,y}` em vez dos campos achatados do Prisma (`ADR-003`). |
 
-**Ainda não existem** (previstos para sprints seguintes, ver
-`docs/sprints/`): edição/exclusão de `mapa` e manipulação de pontos
-(Sprint 04), módulo `missao` (Sprints 05-06).
+**Ainda não existe** (previsto para sprints seguintes, ver `docs/sprints/`):
+módulo `missao` (Sprints 05-06) — o CRUD de Mapa e Drone está completo e
+pronto para ser consumido pelo pipeline de cálculo de rota.
 
 ## Como os módulos se comunicam
 
@@ -115,13 +115,31 @@ antecipados na Sprint 01 para que as regras RN13/RN15 (edição desativa
 Missão; exclusão bloqueada se houver Missão associada), implementadas a
 partir da Sprint 02, consultem tabelas reais desde o início — decisão
 registrada nos arquivos de sprint (`docs/sprints/sprint-01.md` a
-`sprint-04.md`). `User`, `Drone` e, a partir desta sprint, `Mapa` e
-`PontoIrrigacao` têm lógica de negócio (CRUD parcial, no caso de `Mapa`)
-implementada; `Missao` segue existindo apenas no schema, sem service próprio
+`sprint-04.md`). `User`, `Drone` e `Mapa`/`PontoIrrigacao` têm CRUD completo
+implementado; `Missao` segue existindo apenas no schema, sem service próprio
 — usado até aqui só como fixture de teste inserida diretamente via Prisma
-para validar RN13/RN15 do módulo `drone`.
+para validar RN13/RN15 dos módulos `drone` e `mapa`.
 
 ## O que mudou desde a última atualização
+
+**Sprint 04** — CRUD de Mapa encerrado (US-012 a US-015): `PATCH
+/mapas/:id/ponto-carregamento` (US-012), `POST /mapas/:id/pontos-irrigacao`
+(US-013), `DELETE /mapas/:id/pontos-irrigacao/:pontoId` (US-014) e `DELETE
+/mapas/:id` (US-015), como sub-recursos aninhados sob `/mapas/:id` — decisão
+confirmada com o usuário para manter uma responsabilidade por rota, em vez de
+um `PATCH /mapas/:id` genérico com campos mutuamente exclusivos. As três
+operações de escrita desativam Missões `ATIVA` associadas em transação
+(RN13), mesmo padrão de `drone`; `DELETE /mapas/:id` bloqueia por qualquer
+Missão associada (RN15). RN16/RN17/RN18 — que em US-009 (Sprint 03) só
+podiam ser validadas no schema Zod porque todos os pontos chegavam num único
+payload — precisaram migrar para o service em US-012/US-013, pois a nova
+coordenada precisa ser comparada contra pontos já persistidos no banco; a
+mesma mudança de contexto trocou o tipo de erro de `400` (`ZodError`) para
+`409` (`ConflictError`), decisão confirmada explicitamente com o usuário e
+alinhada ao padrão já usado por RN15 em `drone.excluir`. RN01 (não remover o
+último ponto de irrigação) segue a mesma lógica em US-014. Nenhum ADR novo
+(nenhuma decisão de infraestrutura/mecanismo nova além de `ADR-003`, já
+registrada na Sprint 03).
 
 **Sprint 03** — módulo `mapa` implementado (cadastro e consulta: US-009 a
 US-011). `POST /mapas` cria o Mapa e seus PontosIrrigacao atomicamente via

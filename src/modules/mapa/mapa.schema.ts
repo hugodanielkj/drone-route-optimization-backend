@@ -43,3 +43,11 @@ export const cadastroMapaSchema = z
   });
 
 export type CadastroMapaInput = z.infer<typeof cadastroMapaSchema>;
+
+export const alterarPontoCarregamentoSchema = coordenadaSchema;
+
+export type AlterarPontoCarregamentoInput = z.infer<typeof alterarPontoCarregamentoSchema>;
+
+export const adicionarPontoIrrigacaoSchema = coordenadaSchema;
+
+export type AdicionarPontoIrrigacaoInput = z.infer<typeof adicionarPontoIrrigacaoSchema>;

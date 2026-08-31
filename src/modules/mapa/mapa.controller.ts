@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { Prisma } from '@prisma/client';
-import { cadastroMapaSchema } from './mapa.schema';
+import { adicionarPontoIrrigacaoSchema, alterarPontoCarregamentoSchema, cadastroMapaSchema } from './mapa.schema';
 import { mapaService } from './mapa.service';
 
 type MapaComPontos = Prisma.MapaGetPayload<{ include: { pontosIrrigacao: true } }>;
@@ -41,6 +41,44 @@ export async function buscarPorId(req: Request, res: Response, next: NextFunctio
   try {
     const mapa = await mapaService.buscarPorId(req.usuarioId as string, req.params.id as string);
     res.status(200).json(formatarMapa(mapa));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function alterarPontoCarregamento(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const input = alterarPontoCarregamentoSchema.parse(req.body);
+    const mapa = await mapaService.alterarPontoCarregamento(req.usuarioId as string, req.params.id as string, input);
+    res.status(200).json(formatarMapa(mapa));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function adicionarPontoIrrigacao(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const input = adicionarPontoIrrigacaoSchema.parse(req.body);
+    const mapa = await mapaService.adicionarPontoIrrigacao(req.usuarioId as string, req.params.id as string, input);
+    res.status(201).json(formatarMapa(mapa));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function removerPontoIrrigacao(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await mapaService.removerPontoIrrigacao(req.usuarioId as string, req.params.id as string, req.params.pontoId as string);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function excluir(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await mapaService.excluir(req.usuarioId as string, req.params.id as string);
+    res.status(204).send();
   } catch (error) {
     next(error);
   }
