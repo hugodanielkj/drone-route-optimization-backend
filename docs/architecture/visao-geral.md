@@ -1,7 +1,8 @@
 # Visão geral da arquitetura
 
 > Retrato do estado atual do sistema — atualizado ao final de cada sprint.
-> Última atualização: **Sprint 05** (motor de cálculo de rota + `POST /missoes`, US-016).
+> Última atualização: **Sprint 06** (ciclo de vida e consulta de Missões,
+> US-017 a US-020) — **backlog original (US-001 a US-020) encerrado.**
 
 ## Stack
 
@@ -23,12 +24,7 @@ injeção de dependência, no espírito do Nest mas registrada manualmente em
 | `config` | `src/config/` | `env.ts` (leitura validada de variáveis de ambiente), `prisma.ts` (instância única do `PrismaClient`). |
 | `drone` | `src/modules/drone/` | CRUD completo de Drone, protegido por `autenticacaoMiddleware` em todas as rotas: `POST /` (US-004), `GET /` (US-005), `GET /:id` (US-006), `PATCH /:id` — edição parcial (US-007), `DELETE /:id` (US-008). Ownership por `userId` em toda operação de leitura/edição/exclusão (RN11); `PATCH` desativa Missões `ATIVA` associadas em transação (RN13); `DELETE` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15). |
 | `mapa` | `src/modules/mapa/` | **CRUD completo de Mapa**, protegido por `autenticacaoMiddleware`: `POST /` (US-009), `GET /` (US-010), `GET /:id` (US-011), `PATCH /:id/ponto-carregamento` (US-012), `POST /:id/pontos-irrigacao` (US-013), `DELETE /:id/pontos-irrigacao/:pontoId` (US-014), `DELETE /:id` (US-015). Ownership centralizado em `mapaService.buscarPorId`, réplica do padrão de `drone` (RN11). RN01 (não remover o último ponto de irrigação), RN16 (máx. 1000 pontos), RN17 (ponto de irrigação ≠ ponto de carregamento) e RN18 (sem pontos de irrigação duplicados) são validadas no schema Zod quando a checagem é só sobre o payload (cadastro, US-009), e no service via `ConflictError`/409 quando dependem de estado já persistido (US-012 a US-014) — decisão confirmada explicitamente com o usuário. `PATCH`/`POST`/`DELETE :pontoId` desativam Missões `ATIVA` associadas em transação (RN13); `DELETE /:id` bloqueia se houver qualquer Missão associada, ativa ou desativada (RN15), mesmo padrão de `drone`. Resposta agrupa coordenadas como `{x,y}` em vez dos campos achatados do Prisma (`ADR-003`). |
-| `missao` | `src/modules/missao/` | `POST /` (US-016), protegido por `autenticacaoMiddleware`: calcula e persiste uma nova Missão `ATIVA` para um par (drone, mapa) do usuário autenticado (RN11, via `droneService.buscarPorId`/`mapaService.buscarPorId`) sem Missão existente — par já calculado responde `409` (reaproveitamento/reativação reais ficam para a Sprint 06, US-017/US-018). Motor de cálculo isolado em `missao/motor/` (sem Express/Prisma): vizinho mais próximo → 2-opt (ciclo fechado, first-improvement) no trajeto completo → divisão em pernas por capacidade de bateria (RN04, RN05 estendida a todos os pontos) → `move` entre pernas (steepest descent, só confirma troca que preserva RN04 nas duas pernas — regra corrigida nesta sprint) → 2-opt por perna. Rota inviável (RN05) e Missão já existente respondem `409` (`ConflictError`). Pernas persistidas como JSON em `Missao.pernas` (`ADR-004`). |
-
-**Ainda não existe** (previsto para a Sprint 06, ver `docs/sprints/sprint-06.md`):
-reaproveitamento de missão ativa (RN12, US-017), recálculo/reativação de
-missão desativada (RN14, US-018), listagem (US-019) e consulta de detalhe
-(US-020) de Missões.
+| `missao` | `src/modules/missao/` | **Ciclo de vida completo de Missão**, protegido por `autenticacaoMiddleware`: `POST /` calcula/reaproveita/recalcula (US-016 cria; US-017 reaproveita Missão `ATIVA` sem recalcular, RN12; US-018 recalcula e reativa Missão `DESATIVADA` com os dados atuais de drone/mapa, RN14 — `200` para reaproveitar/recalcular, `201` só na criação de fato), `GET /` lista as missões do usuário em formato resumido, sem `pernas` (US-019), `GET /:id` retorna o detalhe completo com `pernas` (US-020, ownership via `findFirst({ drone: { userId } })` já que `Missao` não tem `userId` próprio). Motor de cálculo isolado em `missao/motor/` (sem Express/Prisma): vizinho mais próximo → 2-opt (ciclo fechado, first-improvement) no trajeto completo → divisão em pernas por capacidade de bateria (RN04, RN05 estendida a todos os pontos) → `move` entre pernas (steepest descent, só confirma troca que preserva RN04 nas duas pernas) → 2-opt por perna. Rota inviável (RN05, inclusive durante recálculo — Missão permanece desativada) responde `409` (`ConflictError`). Pernas persistidas como JSON em `Missao.pernas` (`ADR-004`). |
 
 ## Como os módulos se comunicam
 
@@ -73,7 +69,8 @@ graph TD
     Client -->|POST /auth/login| AuthRoutes --> AuthController --> AuthService
     Client -->|"/drones/*"| DroneRoutes --> AuthMW --> DroneController --> DroneService
     Client -->|"/mapas/*"| MapaRoutes --> AuthMW --> MapaController --> MapaService
-    Client -->|POST /missoes| MissaoRoutes --> AuthMW --> MissaoController --> MissaoService
+    Client -->|"POST /missoes (cria/reaproveita/recalcula)"| MissaoRoutes --> AuthMW --> MissaoController --> MissaoService
+    Client -->|"GET /missoes, GET /missoes/:id"| MissaoRoutes
 
     UsuarioService --> Senha
     UsuarioService --> Prisma
@@ -133,13 +130,40 @@ Missão; exclusão bloqueada se houver Missão associada), implementadas a
 partir da Sprint 02, consultem tabelas reais desde o início — decisão
 registrada nos arquivos de sprint (`docs/sprints/sprint-01.md` a
 `sprint-04.md`). `User`, `Drone` e `Mapa`/`PontoIrrigacao` têm CRUD completo
-implementado; `Missao` agora tem seu primeiro service (`missaoService.calcular`,
-US-016) escrevendo registros reais nela — até a Sprint 04, era usada só como
-fixture de teste inserida diretamente via Prisma para validar RN13/RN15 dos
-módulos `drone` e `mapa`. `Missao.pernas` (`Json?`) persiste o array de pernas
-retornado pelo motor de cálculo, formato decidido em `ADR-004`.
+implementado; `Missao` agora tem ciclo de vida completo via `missaoService`
+(criar, reaproveitar, recalcular/reativar, listar, detalhar) — até a Sprint
+04, era usada só como fixture de teste inserida diretamente via Prisma para
+validar RN13/RN15 dos módulos `drone` e `mapa`; a partir da Sprint 06, esses
+mesmos RN13/RN15 são exercitados também com Missões nascidas do pipeline
+real (`missao.controller.spec.ts`, describe "Ciclo de vida completo").
+`Missao.pernas` (`Json?`) persiste o array de pernas retornado pelo motor de
+cálculo, formato decidido em `ADR-004`.
 
 ## O que mudou desde a última atualização
+
+**Sprint 06** — ciclo de vida e consulta de Missões encerra o backlog
+original (US-017 a US-020). `missaoService.calcular` (antes exclusiva de
+US-016) passou a retornar `{ missao, criada: boolean }` em vez de só
+`Missao`, e ganhou dois novos ramos por `status` da Missão existente:
+`ATIVA` → retorna o resultado persistido sem nenhuma escrita no banco
+(US-017, RN12); `DESATIVADA` → reexecuta `calcularRotaOuRejeitar` (já
+existente desde a Sprint 05) com os dados atuais de drone/mapa e faz
+`prisma.missao.update` na mesma linha, preservando a identidade (US-018,
+RN14) — se o recálculo cair em RN05, o erro se propaga antes de qualquer
+escrita, então a Missão permanece desativada e intocada. Decisão de contrato
+confirmada com o usuário: `200` para reaproveitar/recalcular, `201`
+reservado só para a criação de fato (US-016). Novos `GET /missoes` (US-019,
+`missaoService.listar`, resumo sem `pernas` — decisão de contrato
+confirmada, já que só o detalhe exige esse campo) e `GET /missoes/:id`
+(US-020, `missaoService.buscarPorId`) — como `Missao` não tem `userId`
+próprio, a checagem de ownership usa filtro relacional do Prisma
+(`findFirst`/`findMany` com `drone: { userId }`) em vez do padrão de duas
+etapas usado em `drone`/`mapa`. Teste de integração novo (DoD da sprint)
+exercita RN13/RN15 com uma Missão nascida do pipeline real (calcular →
+editar drone/mapa → Missão desativada → exclusão bloqueada), não mais só
+fixture. Nenhum ADR novo (extensão de contrato de API, mesmo padrão das
+Sprints 02/04). Suíte completa: 19 suítes, 254 testes, `pnpm typecheck` sem
+erros — **backlog original (US-001 a US-020) encerrado.**
 
 **Sprint 05** — módulo `missao` criado (US-016): `POST /missoes` calcula e
 persiste a primeira Missão para um par (drone, mapa). Motor de cálculo isolado
